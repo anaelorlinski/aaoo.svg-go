@@ -1,0 +1,4 @@
+# Fetched by ./fetch-suite.sh, never committed: ~25 MB of reference data.
+testdata/
+# Run output.
+out/
