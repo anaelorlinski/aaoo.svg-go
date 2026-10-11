@@ -20,6 +20,7 @@ var (
 	PStopColor, PStopOpacity                           = svgcss.PStopColor, svgcss.PStopOpacity
 	PTextAnchor, PDominantBaseline, PAlignmentBaseline = svgcss.PTextAnchor, svgcss.PDominantBaseline, svgcss.PAlignmentBaseline
 	PClipRule, PClipPath, PMask, PFilter               = svgcss.PClipRule, svgcss.PClipPath, svgcss.PMask, svgcss.PFilter
+	PMaskType, PMixBlendMode                           = svgcss.PMaskType, svgcss.PMixBlendMode
 	PPaintOrder, PShapeRendering, PColorInterpolation  = svgcss.PPaintOrder, svgcss.PShapeRendering, svgcss.PColorInterpolation
 )
 

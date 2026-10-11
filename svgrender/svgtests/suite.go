@@ -90,8 +90,11 @@ func LoadSuite(root string) ([]Case, error) {
 //
 // This is the seam that lets the harness outlive its current backend: today
 // it is svgrender, on the draw engine.
+//
+// path is the file the source was read from, which the relative references
+// of the document are resolved against.
 type Renderer interface {
-	Render(svg []byte, width int) (img image.Image, warnings []string, err error)
+	Render(svg []byte, path string, width int) (img image.Image, warnings []string, err error)
 }
 
 // Result is one case's outcome.
@@ -111,14 +114,20 @@ func (r Result) Silent() bool {
 // Run renders and compares every case. Cases are independent; failures are
 // recorded, never fatal.
 func Run(cases []Case, r Renderer, width int) []Result {
+	return RunEach(cases, r, width, nil)
+}
+
+// RunEach is [Run], calling each with the image of every case that was
+// rendered, to look at it.
+func RunEach(cases []Case, r Renderer, width int, each func(Case, image.Image)) []Result {
 	out := make([]Result, 0, len(cases))
 	for _, c := range cases {
-		out = append(out, runOne(c, r, width))
+		out = append(out, runOne(c, r, width, each))
 	}
 	return out
 }
 
-func runOne(c Case, r Renderer, width int) Result {
+func runOne(c Case, r Renderer, width int, each func(Case, image.Image)) Result {
 	res := Result{Case: c}
 
 	src, err := os.ReadFile(c.SVG)
@@ -135,7 +144,7 @@ func runOne(c Case, r Renderer, width int) Result {
 	if width <= 0 {
 		width = ref.Bounds().Dx()
 	}
-	img, warns, err := r.Render(src, width)
+	img, warns, err := r.Render(src, c.SVG, width)
 	res.Warnings = warns
 	if err != nil {
 		res.Err = err
@@ -147,6 +156,9 @@ func runOne(c Case, r Renderer, width int) Result {
 		return res
 	}
 	res.Diff = Compare(ref, img)
+	if each != nil {
+		each(c, img)
+	}
 	return res
 }
 
@@ -160,14 +172,15 @@ func loadPNG(path string) (image.Image, error) {
 	return img, err
 }
 
-// WriteCSV emits one row per case, column-compatible with the pre-existing
-// Rust harness so old and new runs can be diffed directly.
+// WriteCSV emits one row per case. The first columns are those of the
+// pre-existing Rust harness; the shape columns, which the bucket follows,
+// come after them.
 func WriteCSV(w io.Writer, results []Result) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write([]string{
 		"test", "bucket", "ref_w", "ref_h", "out_w", "out_h", "total_px",
 		"diff_t1", "diff_t16", "pct_t1", "pct_t16", "max_delta", "silent",
-		"warnings", "run_error",
+		"warnings", "run_error", "diff_shape", "pct_shape",
 	}); err != nil {
 		return err
 	}
@@ -184,6 +197,7 @@ func WriteCSV(w io.Writer, results []Result) error {
 			fmt.Sprintf("%.3f", r.PctT1()), fmt.Sprintf("%.3f", r.PctT16()),
 			itoa(r.MaxDelta), strconv.FormatBool(r.Silent()),
 			strings.Join(r.Warnings, " | "), errStr,
+			strconv.FormatInt(r.DiffShape, 10), fmt.Sprintf("%.3f", r.PctShape()),
 		}); err != nil {
 			return err
 		}

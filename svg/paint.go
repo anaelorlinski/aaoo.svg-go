@@ -327,12 +327,17 @@ func (gr gradient) paint(dst gfxcore.Canvas, node *svgNode, opacity Fl, dims dra
 	}
 
 	if len(gr.colors) == 1 { // actually solid
-		dst.State().SetColorRgba(gr.colors[0], stroke)
+		color := gr.colors[0]
+		color.A *= opacity
+		dst.State().SetColorRgba(color, stroke)
 		return true
 	}
 
-	bbox, ok := node.resolveBoundingBox(dims, stroke)
-	if !ok {
+	// The box the units of the gradient are fractions of: the one of the
+	// shape, without its stroke. A shape with no width or no height, like
+	// a horizontal line, has none, and such a gradient does not paint it.
+	bbox, ok := node.maskBox(dims)
+	if !gr.isUnitsUserSpace && !(ok && bbox.Width > 0 && bbox.Height > 0) {
 		return false
 	}
 
@@ -351,6 +356,10 @@ func (gr gradient) paint(dst gfxcore.Canvas, node *svgNode, opacity Fl, dims dra
 		previousPos = pos
 	}
 	colors := append([]parser.RGBA(nil), gr.colors...)
+	// the opacity of the fill, or of the stroke, is the one of every stop
+	for i := range colors {
+		colors[i].A *= opacity
+	}
 
 	switch gr.spreadMethod {
 	case Repeat, Reflect:
@@ -484,15 +493,11 @@ func (gr gradient) paint(dst gfxcore.Canvas, node *svgNode, opacity Fl, dims dra
 	}
 
 	if laidOutGradient.Kind == "solid" {
-		dst.Rectangle(0, 0, width, height)
-		dst.State().SetColorRgba(laidOutGradient.Colors[0], false)
-		dst.Paint(gfxcore.FillNonZero)
+		dst.State().SetColorRgba(laidOutGradient.Colors[0], stroke)
 		return true
 	}
 
-	pattern := dst.NewGroup(0, 0, width, height)
-	pattern.DrawGradient(laidOutGradient, dims.concreteWidth, dims.concreteHeight)
-	dst.State().SetColorPattern(pattern, width, height, mt, stroke)
+	dst.State().SetColorGradient(laidOutGradient, mt, stroke)
 	return true
 }
 
@@ -503,14 +508,26 @@ type pattern struct {
 
 	isUnitsUserSpace   bool // patternUnits
 	isContentUnitsBBox bool // patternContentUnits
+	// transforms is the patternTransform: it applies to the tiling as a
+	// whole, tiles and content.
+	transforms []transform
+	// preserveRatio fits the viewBox of the pattern in a tile.
+	preserveRatio preserveAspectRatio
 }
 
 func newPattern(node *cascadedNode, children []*svgNode) (out pattern, err error) {
 	out.children = children
 	out.isUnitsUserSpace = node.attrs["patternUnits"] == "userSpaceOnUse"
 	out.isContentUnitsBBox = node.attrs["patternContentUnits"] == "objectBoundingBox"
+	out.preserveRatio = node.attrs.aspectRatio()
 
 	err = node.attrs.parseCommonAttributes(node.props, &out.attributes)
+	if err != nil {
+		return out, fmt.Errorf("parsing pattern element: %s", err)
+	}
+	// a pattern has no place of its own: what moves it is patternTransform
+	out.attributes.transforms = nil
+	out.transforms, err = parseTransform(node.attrs["patternTransform"])
 	if err != nil {
 		return out, fmt.Errorf("parsing pattern element: %s", err)
 	}
@@ -519,54 +536,51 @@ func newPattern(node *cascadedNode, children []*svgNode) (out pattern, err error
 }
 
 func (pt pattern) paint(dst gfxcore.Canvas, node *svgNode, opacity Fl, dims drawingDims, svg *SVGImage, stroke bool) bool {
-	bbox, ok := node.resolveBoundingBox(dims, stroke)
-	if !ok {
+	if opacity <= 0 {
+		// nothing shows
+		dst.State().SetColorRgba(parser.RGBA{}, stroke)
+		return true
+	}
+	// the box the units of the pattern are fractions of: the one of the
+	// shape, without its stroke
+	bbox, hasBBox := node.maskBox(dims)
+	contentInBBox := pt.isContentUnitsBBox && pt.viewbox == nil
+	if (!pt.isUnitsUserSpace || contentInBBox) && !(hasBBox && bbox.Width > 0 && bbox.Height > 0) {
 		return false
 	}
 
-	mat := matrix.Translation(bbox.X, bbox.Y)
-
-	var patternWidth, patternHeight Fl
+	// the first tile, in the coordinates of the element
+	var x, y, patternWidth, patternHeight Fl
 	if pt.isUnitsUserSpace {
-		patternWidth = pt.width.Resolve(&dims.Dims, 1)
-		patternHeight = pt.height.Resolve(&dims.Dims, 1)
+		x = pt.x.Resolve(&dims.Dims, dims.ViewportW)
+		y = pt.y.Resolve(&dims.Dims, dims.ViewportH)
+		patternWidth = pt.width.Resolve(&dims.Dims, dims.ViewportW)
+		patternHeight = pt.height.Resolve(&dims.Dims, dims.ViewportH)
 	} else {
-		width, height := bbox.Width, bbox.Height
-
-		if pt.width.V == 0 {
-			pt.width = Value{U: Px, V: 1}
-		}
-		if pt.height.V == 0 {
-			pt.height = Value{U: Px, V: 1}
-		}
-		patternWidth = pt.width.Resolve(&dims.Dims, 1) * width
-		patternHeight = pt.height.Resolve(&dims.Dims, 1) * height
-
-		if pt.viewbox == nil {
-			pt.box.width = Value{U: Px, V: patternWidth}
-			pt.box.height = Value{U: Px, V: patternHeight}
-			if pt.isContentUnitsBBox {
-				pt.transforms = []transform{{kind: scale, args: [6]Value{
-					{U: Px, V: width}, {U: Px, V: height},
-				}}}
-			}
-		}
+		x = bbox.X + fraction(pt.x)*bbox.Width
+		y = bbox.Y + fraction(pt.y)*bbox.Height
+		patternWidth = fraction(pt.width) * bbox.Width
+		patternHeight = fraction(pt.height) * bbox.Height
 	}
 
-	// Fail if pattern has an invalid size
-	if patternWidth == 0 || patternHeight == 0 {
-		return false
-	}
-
-	tr := aggregateTransforms(pt.transforms, &dims, dims.diagonal)
-	mat.RightMultBy(tr)
-
-	if patternWidth <= 0 || patternHeight <= 0 {
+	if !(patternWidth > 0 && patternHeight > 0) {
 		// a degenerate tile cannot be rasterized; the pattern paints
 		// nothing
-		logger.Warn("ignoring pattern with zero-sized tile")
+		if patternWidth != 0 && patternHeight != 0 {
+			logger.Warn("ignoring pattern with zero-sized tile")
+		}
 		return false
 	}
+
+	// From a tile to the element: the tile is put at (x, y), then the
+	// whole tiling is moved by patternTransform.
+	mat := aggregateTransforms(pt.transforms, &dims, dims.diagonal)
+	if mat.Determinant() == 0 {
+		// a transform that cannot be inverted places nothing: the tiling
+		// is left where it is, as resvg does
+		mat = matrix.Identity()
+	}
+	mat.RightMultBy(matrix.Translation(x, y))
 
 	// a tile costs a group and a deferred tile: more than a plain draw
 	if svg.budgetExhausted() {
@@ -575,8 +589,7 @@ func (pt pattern) paint(dst gfxcore.Canvas, node *svgNode, opacity Fl, dims draw
 	svg.drawBudget -= limits.PatternTileDraws
 
 	// draw the pattern content on the temporary target
-	pat := dst.NewGroup(0, 0, patternWidth, patternHeight)
-	pat.State().SetColorRgba(parser.RGBA{A: opacity}, false)
+	pat := dst.NewPatternTile(patternWidth, patternHeight)
 	// with the definitions, the reference guard and the draw budget of the
 	// image: a pattern may use gradients, clip paths, other patterns. An
 	// empty pattern paints nothing (and cannot recurse).
@@ -586,12 +599,34 @@ func (pt pattern) paint(dst gfxcore.Canvas, node *svgNode, opacity Fl, dims draw
 			return false
 		}
 		svg.materialiseText(&pt.svgNode)
-		svg.drawRoot(pat, &pt.svgNode, patternWidth, patternHeight)
+		pat.OnNewStack(func() {
+			// The content is in the coordinates of the tile, unless the
+			// pattern has a viewBox, fitted in the tile, or asks for the
+			// ones of the bounding box.
+			// the size of the tile, in the units of its content
+			width, height := patternWidth, patternHeight
+			switch {
+			case pt.viewbox != nil:
+				sx, sy, tx, ty := pt.preserveRatio.resolveTransforms(patternWidth, patternHeight, pt.viewbox, nil)
+				pat.State().Transform(matrix.New(sx, 0, 0, sy, tx, ty))
+			case pt.isContentUnitsBBox:
+				pat.State().Transform(matrix.Scaling(bbox.Width, bbox.Height))
+				width, height = patternWidth/bbox.Width, patternHeight/bbox.Height
+			}
+			content := pt.svgNode
+			content.x, content.y, content.width, content.height = Value{}, Value{}, Value{}, Value{}
+			svg.drawRoot(pat, &content, width, height)
+		})
 		svg.leaveRef(key)
 	}
 
 	// apply the pattern
-	dst.State().SetColorPattern(pat, patternWidth, patternHeight, mat, stroke)
+	dst.State().SetColorPattern(gfxcore.Pattern{
+		Tile:  pat,
+		Width: patternWidth, Height: patternHeight,
+		Transform: mat,
+		Opacity:   opacity,
+	}, stroke)
 
 	return true
 }

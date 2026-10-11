@@ -190,10 +190,12 @@ func (im *Image) Draw(dst draw.Image, x, y, width, height, opacity float64) erro
 		textLock.Lock()
 		defer textLock.Unlock()
 	}
-	if opacity < 1 {
+	if opacity <= 0 {
+		// nothing is seen
+	} else if opacity < 1 {
 		group := c.NewGroup(0, 0, gfxcore.Fl(width), gfxcore.Fl(height))
 		im.doc.Draw(group, gfxcore.Fl(width), gfxcore.Fl(height), text)
-		c.DrawWithOpacity(gfxcore.Fl(max(opacity, 0)), group)
+		c.DrawGroup(group, gfxcore.Composite{Opacity: gfxcore.Fl(opacity)})
 	} else {
 		im.doc.Draw(c, gfxcore.Fl(width), gfxcore.Fl(height), text)
 	}

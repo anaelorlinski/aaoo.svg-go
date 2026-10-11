@@ -1078,7 +1078,16 @@ func newMarker(node *cascadedNode, children []*svgNode) (out *marker, err error)
 // be used as an alpha mask
 type mask struct {
 	svgNode
+	// isUnitsBBox: x, y, width and height are fractions of the bounding box
+	// of the masked element (maskUnits, objectBoundingBox by default).
 	isUnitsBBox bool
+	// isContentUnitsBBox: the content of the mask is drawn in a coordinate
+	// system where the bounding box is the unit square (maskContentUnits,
+	// userSpaceOnUse by default).
+	isContentUnitsBBox bool
+	// isAlpha: the mask hides by its opacity, not by its luminance
+	// (mask-type).
+	isAlpha bool
 }
 
 func newMask(node *cascadedNode, children []*svgNode) (mask, error) {
@@ -1086,12 +1095,17 @@ func newMask(node *cascadedNode, children []*svgNode) (mask, error) {
 		svgNode: svgNode{
 			children: children,
 		},
-		isUnitsBBox: node.attrs["maskUnits"] == "objectBoundingBox",
+		isUnitsBBox:        node.attrs["maskUnits"] != "userSpaceOnUse",
+		isContentUnitsBBox: node.attrs["maskContentUnits"] == "objectBoundingBox",
+		isAlpha:            KeywordOf(node.props, PMaskType) == "alpha",
 	}
 	err := node.attrs.parseCommonAttributes(node.props, &out.svgNode.attributes)
 	if err != nil {
 		return mask{}, err
 	}
+	// a mask is not drawn where it is, but where it is used: its own
+	// transform has no effect
+	out.attributes.transforms = nil
 	// default values
 	if out.x.U == 0 {
 		out.x = Value{-10, Perc} // -10%

@@ -88,10 +88,6 @@ func (outputPage) SetTextPaint(gfxcore.PaintOp) {
 	outputLog.Println("SetTextPaint")
 }
 
-func (outputPage) SetBlendingMode(mode string) {
-	outputLog.Println("SetTextPaint")
-}
-
 func (outputPage) DrawText(text []gfxcore.TextDrawing) {
 	outputLog.Println("DrawText", text)
 }
@@ -105,15 +101,16 @@ func (outputPage) DrawRasterImage(img gfxcore.RasterImage, width, height fl) {
 	outputLog.Println("DrawRasterImage")
 }
 
-func (outputPage) SetAlphaMask(mask gfxcore.Canvas) {
-	outputLog.Println("SetAlphaMask")
+func (outputPage) NewPatternTile(width, height Fl) gfxcore.Canvas {
+	outputLog.Println("NewPatternTile")
+	return outputPage{}
 }
 
-func (outputPage) DrawGradient(gradient gfxcore.GradientLayout, width, height fl) {
-	outputLog.Println("DrawGradient")
+func (outputPage) SetColorGradient(gfxcore.GradientLayout, matrix.Transform, bool) {
+	outputLog.Println("SetColorGradient")
 }
 
-func (outputPage) DrawWithOpacity(opacity fl, group gfxcore.Canvas) {
+func (outputPage) DrawGroup(group gfxcore.Canvas, composite gfxcore.Composite) {
 	outputLog.Println("DrawGroup")
 }
 
@@ -121,7 +118,7 @@ func (outputPage) SetStrokeOptions(gfxcore.StrokeOptions) {
 	outputLog.Println("SetStrokeOptions")
 }
 
-func (outputPage) SetColorPattern(gfxcore.Canvas, fl, fl, matrix.Transform, bool) {
+func (outputPage) SetColorPattern(gfxcore.Pattern, bool) {
 	outputLog.Println("SetColorPattern")
 }
 

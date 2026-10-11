@@ -18,7 +18,6 @@ import (
 
 	pr "github.com/anaelorlinski/aaoo.cssengine-go/properties"
 	"github.com/anaelorlinski/aaoo.gfxcore-go"
-	"github.com/anaelorlinski/aaoo.gfxcore-go/matrix"
 	"github.com/anaelorlinski/aaoo.svg-go/svg"
 	"github.com/anaelorlinski/aaoo.textengine-go/layout"
 )
@@ -586,13 +585,11 @@ func (p textPass) End(dst gfxcore.Canvas) gfxcore.Canvas {
 			x, y, width, height := bbox.X, bbox.Y, bbox.Width, bbox.Height
 			// Add extra space to include ink extents
 			group.SetBoundingBox(x-dims.FontSize, y-dims.FontSize, x+width+dims.FontSize, y+height+dims.FontSize)
-			xAlign := width
-			if pass.anchor == middle {
-				xAlign = width / 2
-			}
-			dst.State().Transform(matrix.Translation(-xAlign, 0))
 		}
-		dst.DrawWithOpacity(1, group)
+		// The group is put where it was drawn: the spans were drawn at
+		// their anchored places, see beginAnchor. Moving the canvas here
+		// would move the group, and anchor the text twice.
+		dst.DrawGroup(group, gfxcore.Composite{})
 	})
 	return dst
 }

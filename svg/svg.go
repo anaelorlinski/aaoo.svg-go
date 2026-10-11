@@ -295,9 +295,15 @@ func (svg *SVGImage) drawNode(dst gfxcore.Canvas, node *svgNode, dims drawingDim
 	dims.FontSize = node.attributes.fontSize.Resolve(&dims.Dims, dims.FontSize)
 
 	paintTask := func() {
+		// What applies to the node as a whole, with its children and its
+		// markers: its opacity, its mask and the way it is mixed with what
+		// is under it. The node is then drawn in a group, put on the canvas
+		// at the end.
+		var composite gfxcore.Composite
+
 		// apply filters
 		if filters := svg.definitions.filters[node.filterID]; filters != nil {
-			applyFilters(dst, filters, node, dims)
+			composite.Blend = applyFilters(dst, filters, node, dims)
 		}
 
 		// apply transform attribute
@@ -306,10 +312,15 @@ func (svg *SVGImage) drawNode(dst gfxcore.Canvas, node *svgNode, dims drawingDim
 			node.attributes.transformOriginX,
 			node.attributes.transformOriginY)
 
-		// create sub group for opacity
+		if mode, ok := gfxcore.ParseBlendMode(node.attributes.blendMode); ok {
+			composite.Blend = mode
+		}
 		opacity := node.attributes.opacity
+		ma, masked := svg.definitions.masks[node.maskID]
+		grouped := paint && (0 <= opacity && opacity < 1 || masked || composite.Blend != gfxcore.BlendNormal)
+
 		var originalDst1 gfxcore.Canvas
-		if paint && 0 <= opacity && opacity < 1 {
+		if grouped {
 			var x, y, width, height Fl = 0, 0, dims.ViewportW, dims.ViewportH
 			if box, ok := node.resolveBoundingBox(dims, true); ok {
 				x, y, width, height = box.X, box.Y, box.Width, box.Height
@@ -323,6 +334,14 @@ func (svg *SVGImage) drawNode(dst gfxcore.Canvas, node *svgNode, dims drawingDim
 			if svg.enterRef("clip:"+node.clipPathID, "clip-path "+node.clipPathID) {
 				svg.applyClipPath(dst, cp, node, dims)
 				svg.leaveRef("clip:" + node.clipPathID)
+			}
+		}
+
+		// The mask covers the node once it is clipped.
+		if masked && paint {
+			if svg.enterRef("mask:"+node.maskID, "mask "+node.maskID) {
+				composite.Mask, composite.MaskMode = svg.drawMask(dst, ma, node, dims)
+				svg.leaveRef("mask:" + node.maskID)
 			}
 		}
 
@@ -357,13 +376,6 @@ func (svg *SVGImage) drawNode(dst gfxcore.Canvas, node *svgNode, dims drawingDim
 		}
 
 		dst = textPass.End(dst)
-		// apply mask
-		if ma, has := svg.definitions.masks[node.maskID]; has {
-			if svg.enterRef("mask:"+node.maskID, "mask "+node.maskID) {
-				svg.applyMask(dst, ma, node, dims)
-				svg.leaveRef("mask:" + node.maskID)
-			}
-		}
 
 		// do the actual painting :
 		// paint by filling and stroking the given node onto the graphic target
@@ -376,9 +388,15 @@ func (svg *SVGImage) drawNode(dst gfxcore.Canvas, node *svgNode, dims drawingDim
 			svg.drawMarkers(dst, vertices, node, dims, paint)
 		}
 
-		// apply opacity group and restore original target
-		if paint && 0 <= opacity && opacity < 1 {
-			originalDst1.DrawWithOpacity(opacity, dst)
+		// put the group on the canvas it was taken from; a node with no
+		// opacity at all is not seen
+		if grouped {
+			if opacity != 0 {
+				if opacity < 1 {
+					composite.Opacity = opacity
+				}
+				originalDst1.DrawGroup(dst, composite)
+			}
 			dst = originalDst1 // actually not used
 		}
 	}
@@ -598,7 +616,9 @@ func applyTransformWithOrigin(dst gfxcore.Canvas, transforms []transform, dims d
 	}
 }
 
-func applyFilters(dst gfxcore.Canvas, filters []filter, node *svgNode, dims drawingDims) {
+// applyFilters applies the filters that move the node, and returns the blend
+// mode of the one that mixes it.
+func applyFilters(dst gfxcore.Canvas, filters []filter, node *svgNode, dims drawingDims) (blend gfxcore.BlendMode) {
 	for _, filter := range filters {
 		switch filter := filter.(type) {
 		case filterOffset:
@@ -612,9 +632,10 @@ func applyFilters(dst gfxcore.Canvas, filters []filter, node *svgNode, dims draw
 			}
 			dst.State().Transform(matrix.New(1, 0, 0, 1, dx, dy))
 		case filterBlend:
-			dst.State().SetBlendingMode(string(filter))
+			blend, _ = gfxcore.ParseBlendMode(string(filter))
 		}
 	}
+	return blend
 }
 
 // enterRef marks a clip-path, mask or marker reference as being applied, and
@@ -680,31 +701,74 @@ func (svg *SVGImage) applyClipPath(dst gfxcore.Canvas, clipPath *clipPath, node 
 	}
 }
 
-func (svg *SVGImage) applyMask(dst gfxcore.Canvas, mask mask, node *svgNode, dims drawingDims) {
-	widthRef, heightRef := dims.ViewportW, dims.ViewportH
-	if mask.isUnitsBBox {
-		widthRef, heightRef = dims.point(node.width, node.height)
+// drawMask draws the mask of a node in a group of dst, and returns it with
+// the way it masks: what [gfxcore.Composite] takes.
+func (svg *SVGImage) drawMask(dst gfxcore.Canvas, mask mask, node *svgNode, dims drawingDims) (gfxcore.Canvas, gfxcore.MaskMode) {
+	bbox, hasBBox := node.maskBox(dims)
+	if (mask.isUnitsBBox || mask.isContentUnitsBBox) && !(hasBBox && bbox.Width > 0 && bbox.Height > 0) {
+		// Units of a bounding box that does not exist: the element is not
+		// drawn. A mask with nothing in it hides everything.
+		return dst.NewGroup(0, 0, 0, 0), gfxcore.MaskAlpha
 	}
 
-	x := mask.x.Resolve(&dims.Dims, widthRef)
-	y := mask.y.Resolve(&dims.Dims, heightRef)
-	width := mask.width.Resolve(&dims.Dims, widthRef)
-	height := mask.height.Resolve(&dims.Dims, heightRef)
-
-	mask.x = Value{x, Px}
-	mask.y = Value{y, Px}
-	mask.width = Value{width, Px}
-	mask.height = Value{height, Px}
-
+	// the region the mask is cut to
+	var x, y, width, height Fl
 	if mask.isUnitsBBox {
-		x, y, width, height = 0, 0, widthRef, heightRef
+		x = bbox.X + fraction(mask.x)*bbox.Width
+		y = bbox.Y + fraction(mask.y)*bbox.Height
+		width = fraction(mask.width) * bbox.Width
+		height = fraction(mask.height) * bbox.Height
 	} else {
-		mask.viewbox = &Rectangle{X: x, Y: y, Width: width, Height: height}
+		x = mask.x.Resolve(&dims.Dims, dims.ViewportW)
+		y = mask.y.Resolve(&dims.Dims, dims.ViewportH)
+		width = mask.width.Resolve(&dims.Dims, dims.ViewportW)
+		height = mask.height.Resolve(&dims.Dims, dims.ViewportH)
 	}
 
 	alpha := dst.NewGroup(x, y, width, height)
-	svg.drawNode(alpha, &mask.svgNode, dims, true)
-	dst.State().SetAlphaMask(alpha)
+	alpha.OnNewStack(func() {
+		alpha.Rectangle(x, y, width, height)
+		alpha.State().Clip(false)
+		if mask.isContentUnitsBBox {
+			alpha.State().Transform(matrix.New(bbox.Width, 0, 0, bbox.Height, bbox.X, bbox.Y))
+		}
+		// the node of the mask is drawn like a group: a mask may itself be
+		// masked, clipped, or partly transparent
+		content := mask.svgNode
+		content.x, content.y, content.width, content.height = Value{}, Value{}, Value{}, Value{}
+		svg.drawNode(alpha, &content, dims, true)
+	})
+
+	if mask.isAlpha {
+		return alpha, gfxcore.MaskAlpha
+	}
+	return alpha, gfxcore.MaskLuminance
+}
+
+// fraction returns a value in units of a bounding box: a number, or a
+// percentage of 1.
+func fraction(v Value) Fl {
+	if v.U == Perc {
+		return v.V / 100
+	}
+	return v.V
+}
+
+// maskBox returns the bounding box masks and clip paths are relative to: the
+// one of the content of the node, without its stroke, or of its children for
+// a group.
+func (node *svgNode) maskBox(dims drawingDims) (Rectangle, bool) {
+	if box, ok := node.resolveBoundingBox(dims, false); ok {
+		return box, true
+	}
+	out, found := emptyBbox, false
+	for _, child := range node.children {
+		if box, ok := child.maskBox(dims); ok {
+			out.union(box)
+			found = true
+		}
+	}
+	return out, found
 }
 
 // Image is an image referenced by an <image> element. Images are loaded
@@ -894,7 +958,9 @@ type attributes struct {
 	transformOriginX, transformOriginY Fl
 	hasTransformOrigin                 bool
 
-	clipPathID, maskID, filterID                      string
+	clipPathID, maskID, filterID string
+	// blendMode is the value of mix-blend-mode, empty for normal.
+	blendMode                                         string
 	markerID, markerStartID, markerMidID, markerEndID string
 
 	dashArray []Value
@@ -1147,6 +1213,9 @@ func (na nodeAttributes) parseSharedAttributes(props pr.Properties, out *attribu
 	out.filterID = referenceOf(props, PFilter)
 	out.clipPathID = referenceOf(props, PClipPath)
 	out.maskID = referenceOf(props, PMask)
+	if mode := KeywordOf(props, PMixBlendMode); mode != "normal" {
+		out.blendMode = mode
+	}
 
 	out.markerID = parseURLFragment(na["marker"])
 	out.markerStartID = referenceOf(props, PMarkerStart)

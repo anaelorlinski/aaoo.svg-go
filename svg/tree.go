@@ -58,6 +58,22 @@ type svgContext struct {
 }
 
 // isCSSWideKeyword reports whether value is a CSS-wide keyword.
+// elementDefaults holds the initial value of the properties some elements
+// do not have by default: the user agent style sheet gives them another one.
+// overflow is visible, and hidden on <svg>, <symbol>, <marker> and
+// <pattern>, which is what their code takes when the attribute is missing.
+var elementDefaults = map[string]string{"overflow": "visible"}
+
+// setInitial gives a property its initial value: for most, the one the
+// elements take when the attribute is missing.
+func setInitial(cascaded nodeAttributes, key string) {
+	if initial, ok := elementDefaults[key]; ok {
+		cascaded[key] = initial
+		return
+	}
+	delete(cascaded, key)
+}
+
 func isCSSWideKeyword(value string) bool {
 	switch strings.ToLower(value) {
 	case "inherit", "initial", "unset", "revert", "revert-layer":
@@ -285,10 +301,10 @@ func cascadeAttributes(specified, parent nodeAttributes) (cascaded, attrs nodeAt
 			if parentVal, has := parent[key]; has && parentVal != "" && !isCSSWideKeyword(parentVal) {
 				cascaded[key] = parentVal
 			} else {
-				delete(cascaded, key)
+				setInitial(cascaded, key)
 			}
 		case "initial":
-			delete(cascaded, key)
+			setInitial(cascaded, key)
 		}
 	}
 

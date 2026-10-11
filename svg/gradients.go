@@ -116,7 +116,7 @@ func (spread GradientSpread) LinearGradient(positions []Fl, colors []parser.RGBA
 		// See https://drafts.csswg.org/css-images-3/#repeating-gradients
 		if first == last {
 			color := gradientAverageColor(colors, positions)
-			return gfxcore.GradientLayout{ScaleY: 1, GradientKind: gfxcore.GradientKind{Kind: "solid"}, Colors: []parser.RGBA{color}}
+			return gfxcore.GradientLayout{ScaleY: 1, Interpolation: gfxcore.InterpolateStraight, GradientKind: gfxcore.GradientKind{Kind: "solid"}, Colors: []parser.RGBA{color}}
 		}
 
 		// Define defined gradient length and steps between positions
@@ -167,7 +167,7 @@ func (spread GradientSpread) LinearGradient(positions []Fl, colors []parser.RGBA
 		x1 + dx*last,
 		y1 + dy*last,
 	}
-	return gfxcore.GradientLayout{ScaleY: 1, GradientKind: gfxcore.GradientKind{Kind: "linear", Coords: points}, Positions: positions, Colors: colors}
+	return gfxcore.GradientLayout{ScaleY: 1, Interpolation: gfxcore.InterpolateStraight, GradientKind: gfxcore.GradientKind{Kind: "linear", Coords: points}, Positions: positions, Colors: colors}
 }
 
 func (spread GradientSpread) RadialGradient(positions []Fl, colors []parser.RGBA, fx, fy, fr, cx, cy, r, width, height Fl) gfxcore.GradientLayout {
@@ -177,7 +177,7 @@ func (spread GradientSpread) RadialGradient(positions []Fl, colors []parser.RGBA
 		// Render as a solid color if the first and last positions are equal
 		// See https://drafts.csswg.org/css-images-3/#repeating-gradients
 		color := gradientAverageColor(colors, positions)
-		return gfxcore.GradientLayout{ScaleY: 1, GradientKind: gfxcore.GradientKind{Kind: "solid"}, Colors: []parser.RGBA{color}}
+		return gfxcore.GradientLayout{ScaleY: 1, Interpolation: gfxcore.InterpolateStraight, GradientKind: gfxcore.GradientKind{Kind: "solid"}, Colors: []parser.RGBA{color}}
 	}
 
 	// Define the coordinates of the gradient circles
@@ -189,7 +189,7 @@ func (spread GradientSpread) RadialGradient(positions []Fl, colors []parser.RGBA
 		circles, positions, colors = spread.repeatRadial(width, height, circles, positions, colors)
 	}
 
-	return gfxcore.GradientLayout{ScaleY: 1, GradientKind: gfxcore.GradientKind{Kind: "radial", Coords: circles}, Positions: positions, Colors: colors}
+	return gfxcore.GradientLayout{ScaleY: 1, Interpolation: gfxcore.InterpolateStraight, GradientKind: gfxcore.GradientKind{Kind: "radial", Coords: circles}, Positions: positions, Colors: colors}
 }
 
 // points = [fx, fy, fr, cx, cy, r]

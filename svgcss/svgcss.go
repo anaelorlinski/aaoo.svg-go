@@ -30,6 +30,7 @@ var (
 	PTextAnchor, PDominantBaseline, PAlignmentBaseline pr.KnownProp
 	PClipRule, PClipPath, PMask, PFilter               pr.KnownProp
 	PPaintOrder, PShapeRendering, PColorInterpolation  pr.KnownProp
+	PMaskType, PMixBlendMode, PIsolation               pr.KnownProp
 )
 
 func init() {
@@ -64,6 +65,12 @@ func init() {
 		"auto", "optimizeSpeed", "crispEdges", "geometricPrecision")
 	PColorInterpolation = keywordProp("color-interpolation", "sRGB", true, "auto", "sRGB", "linearRGB")
 	PPaintOrder = keywordProp("paint-order", "normal", true, "normal", "fill", "stroke", "markers")
+	PMaskType = keywordProp("mask-type", "luminance", false, "luminance", "alpha")
+	PMixBlendMode = keywordProp("mix-blend-mode", "normal", false,
+		"normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge",
+		"color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue",
+		"saturation", "color", "luminosity")
+	PIsolation = keywordProp("isolation", "auto", false, "auto", "isolate")
 
 	// url(...) or none
 	PMarkerStart = referenceProp("marker-start", true)

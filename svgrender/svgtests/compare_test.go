@@ -69,3 +69,61 @@ func TestSingleFarPixelIsGood(t *testing.T) {
 		t.Fatalf("max delta: got %d, want 255", d.MaxDelta)
 	}
 }
+
+// column returns a 20x20 image, black from x = from on, with the given alpha
+// in the column before it: an edge and its coverage.
+func column(from int, coverage uint8) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, 20, 20))
+	for y := range 20 {
+		for x := range 20 {
+			switch {
+			case x >= from:
+				img.SetNRGBA(x, y, color.NRGBA{A: 255})
+			case x == from-1:
+				img.SetNRGBA(x, y, color.NRGBA{A: coverage})
+			}
+		}
+	}
+	return img
+}
+
+// An edge covered another way, or a pixel apart, is not a difference of
+// shape; a shape two pixels apart is.
+func TestCompareShape(t *testing.T) {
+	ref := column(10, 192)
+
+	// the same edge, its coverage rounded another way
+	d := Compare(ref, column(10, 128))
+	if d.DiffT16 == 0 || d.DiffShape != 0 {
+		t.Errorf("another coverage: t16=%d shape=%d, want differences but none of shape", d.DiffT16, d.DiffShape)
+	}
+	if d.Bucket() != Good {
+		t.Errorf("another coverage: bucket %s, want good", d.Bucket())
+	}
+
+	// the edge one pixel apart
+	if d := Compare(ref, column(11, 192)); d.DiffShape != 0 {
+		t.Errorf("one pixel apart: shape=%d, want 0", d.DiffShape)
+	}
+
+	// two pixels apart: a column of pixels is black in one and empty in the other
+	if d := Compare(ref, column(12, 192)); d.DiffShape == 0 {
+		t.Error("two pixels apart: no difference of shape")
+	}
+
+	// a shape that is missing
+	if d := Compare(ref, image.NewNRGBA(image.Rect(0, 0, 20, 20))); d.DiffShape < 150 || d.Bucket() != Bad {
+		t.Errorf("missing shape: shape=%d bucket=%s", d.DiffShape, d.Bucket())
+	}
+
+	// another colour
+	red := image.NewNRGBA(image.Rect(0, 0, 20, 20))
+	for y := range 20 {
+		for x := 10; x < 20; x++ {
+			red.SetNRGBA(x, y, color.NRGBA{R: 255, A: 255})
+		}
+	}
+	if d := Compare(column(10, 0), red); d.DiffShape != 200 {
+		t.Errorf("another colour: shape=%d, want 200", d.DiffShape)
+	}
+}

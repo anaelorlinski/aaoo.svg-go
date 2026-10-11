@@ -12,6 +12,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
+	"image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,6 +29,7 @@ func main() {
 	width := flag.Int("width", svgtests.WidthFromReference, "render width in px; 0 = each reference's own width")
 	filter := flag.String("filter", "", "only run tests whose name contains this")
 	baseline := flag.String("baseline", "", "results.csv to compare against")
+	dump := flag.String("dump", "", "directory to write the rendered images to, beside a copy of their references")
 	flag.Parse()
 
 	cases, err := svgtests.LoadSuite(*suite)
@@ -44,7 +47,15 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "running %d tests...\n", len(cases))
 
-	results := svgtests.Run(cases, canvasrenderer.New(svgtests.FontsDir(*suite)), *width)
+	var each func(svgtests.Case, image.Image)
+	if *dump != "" {
+		each = func(c svgtests.Case, img image.Image) {
+			if err := dumpCase(*dump, c, img); err != nil {
+				log.Print(err)
+			}
+		}
+	}
+	results := svgtests.RunEach(cases, canvasrenderer.New(svgtests.FontsDir(*suite)), *width, each)
 
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatal(err)
@@ -69,4 +80,29 @@ func main() {
 		}
 		fmt.Print(diff)
 	}
+}
+
+// dumpCase writes the image of a case as <name>.out.png, with a copy of its
+// reference as <name>.ref.png, in one flat directory.
+func dumpCase(dir string, c svgtests.Case, img image.Image) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	base := filepath.Join(dir, strings.ReplaceAll(c.Name, "/", "__"))
+	f, err := os.Create(base + ".out.png")
+	if err != nil {
+		return err
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	ref, err := os.ReadFile(c.PNG)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(base+".ref.png", ref, 0o644)
 }

@@ -40,7 +40,7 @@ func New(fontsDir string) Renderer { return Renderer{fontsDir: fontsDir} }
 // output the renderer knew it could not produce.
 type Renderer struct{ fontsDir string }
 
-func (r Renderer) Render(src []byte, width int) (image.Image, []string, error) {
+func (r Renderer) Render(src []byte, path string, width int) (image.Image, []string, error) {
 	// the warnings of the SVG library and of the CSS engine
 	var warns warnings
 	defer svglogger.Set(svglogger.Swap(slog.New(&warns)))
@@ -50,7 +50,12 @@ func (r Renderer) Render(src []byte, width int) (image.Image, []string, error) {
 	engine := newEngine(r.fontsDir)
 	text := textlayout.NewEngine(engine)
 
+	baseURL := ""
+	if abs, err := filepath.Abs(path); err == nil && path != "" {
+		baseURL = "file://" + filepath.ToSlash(abs)
+	}
 	img, err := svgrender.Render(bytes.NewReader(src), width, svgrender.Options{
+		BaseURL: baseURL,
 		// no network: the suite is rendered offline, the same every time
 		Fetcher: svgrender.FileFetcher,
 		Text:    func() svg.TextRenderer { return svgtext.New(text) },

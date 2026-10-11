@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/net/html/charset"
 )
@@ -62,8 +63,18 @@ func basicUrlJoin(baseUrl string, urls *url.URL) (string, error) {
 	return parsedBase.String(), nil
 }
 
+// dataURLSpaces removes what a data URL written on several lines holds
+// besides its data.
+var dataURLSpaces = strings.NewReplacer("\t", "", "\n", "", "\f", "", "\r", "")
+
 // defaut: allowRelative = false
 func SafeUrljoin(baseUrl, urls string, allowRelative bool) (string, error) {
+	// A data URL is not relative to anything, and is not a URL the standard
+	// library parses: it may be megabytes long and written on several
+	// lines, whose breaks and indentation are not part of it.
+	if trimmed := strings.TrimSpace(urls); len(trimmed) >= 5 && strings.EqualFold(trimmed[:5], "data:") {
+		return dataURLSpaces.Replace(trimmed), nil
+	}
 	parsed, err := url.Parse(urls)
 	if err != nil {
 		return "", fmt.Errorf("invalid url : %s (%s)", urls, err)
